@@ -59,7 +59,7 @@ def flash_attention_kernel(
         k = tl.load(k_ptrs, mask=k_mask, other=0.0)
         v = tl.load(v_ptrs, mask=v_mask, other=0.0)
 
-        scores = tl.dot(q, k) * sm_scale
+        scores = tl.dot(q, k , out_dtype=tl.float32) * sm_scale
 
         seq_mask = curr_offs_n[None, :] < N
         if CAUSAL:
@@ -80,8 +80,8 @@ def flash_attention_kernel(
         p = tl.exp(scores - m_new[:, None])
 
         l_i = l_i + tl.sum(p, axis=1)
-        p_cast = p.to(v.dtype)
-        acc = acc + tl.dot(p_cast, v)
+        p_cast = p.to(v.dtype.element_ty)
+        acc = acc + tl.dot(p_cast, v, acc)
 
         m_i = m_new
 
