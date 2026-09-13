@@ -45,7 +45,12 @@ def flash_attention_kernel(
     acc = tl.zeros([BLOCK_M, BLOCK_D], dtype=tl.float32)
 
     # --- Loop over K/V tiles ---
-    for start_n in range(0, N, BLOCK_N):
+    if CAUSAL:
+        hi = min(N, (pid_m + 1) * BLOCK_M)
+    else:
+        hi = N
+
+    for start_n in range(0, hi, BLOCK_N):
         curr_offs_n = start_n + offs_n
 
         k_mask = (offs_d[:, None] < d) & (curr_offs_n[None, :] < N)
@@ -56,12 +61,14 @@ def flash_attention_kernel(
 
         scores = tl.dot(q, k) * sm_scale
 
+        seq_mask = curr_offs_n[None, :] < N
         if CAUSAL:
             causal_mask = offs_m[:, None] >= curr_offs_n[None, :]
-            scores = tl.where(causal_mask, scores, float("-inf"))
+            mask = causal_mask & seq_mask
+        else:
+            mask = seq_mask
 
-        seq_mask = curr_offs_n[None, :] < N
-        scores = tl.where(seq_mask, scores, float("-inf"))
+        scores = tl.where(mask, scores, float("-inf"))
 
         m_tile = tl.max(scores, axis=1)
         m_new = tl.maximum(m_i, m_tile)
