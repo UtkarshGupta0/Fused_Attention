@@ -128,9 +128,23 @@ def fused_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, causal: b
     out = torch.empty_like(q)
 
     # Block configurations
-    BLOCK_M = 64
-    BLOCK_N = 64
+    device_props = torch.cuda.get_device_properties(q.device)
+    raw_max_shared_mem = getattr(device_props, "shared_memory_per_block", 65536)
+
+    SAFETY_MARGIN = 0.8
+    usable_shared_mem = int(raw_max_shared_mem * SAFETY_MARGIN)
+
     BLOCK_D = triton.next_power_of_2(d)
+    element_bytes = q.element_size()
+
+    max_btile = usable_shared_mem // (3 * BLOCK_D * element_bytes)
+
+    B_tile = 64
+    while B_tile > max_btile and B_tile > 16:
+        B_tile //= 2
+
+    BLOCK_M = B_tile
+    BLOCK_N = B_tile
 
     grid = (
         triton.cdiv(N, BLOCK_M),
