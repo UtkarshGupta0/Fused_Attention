@@ -171,7 +171,7 @@ def fused_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, causal: b
         BLOCK_D=BLOCK_D,
         CAUSAL=causal,
 
-        num_wraps = 4,
+        num_warps = 4,
         num_stages = 2,
     )
 
