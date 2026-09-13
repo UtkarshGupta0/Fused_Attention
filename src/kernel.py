@@ -60,7 +60,7 @@ def flash_attention_kernel(
         v = tl.load(v_ptrs, mask=v_mask, other=0.0)
 
         scores = tl.dot(q, tl.trans(k) , out_dtype=tl.float32) * sm_scale
-
+ #
         seq_mask = curr_offs_n[None, :] < N
         if CAUSAL:
             causal_mask = offs_m[:, None] >= curr_offs_n[None, :]
