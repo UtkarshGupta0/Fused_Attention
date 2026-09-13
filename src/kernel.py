@@ -153,6 +153,7 @@ def fused_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, causal: b
     BLOCK_M = B_tile
     BLOCK_N = B_tile
 
+    print( f"[DEBUG] dtype={q.dtype}, element_bytes={q.element_size()}, BLOCK_M={BLOCK_M}, BLOCK_N={BLOCK_N}, BLOCK_D={BLOCK_D}")
     grid = (
         triton.cdiv(N, BLOCK_M),
         B * H,
