@@ -34,7 +34,7 @@ def flash_attention_kernel(
 
     q_ptrs = q_ptr + q_base + offs_m[:, None] * stride_qn + offs_d[None, :] * stride_qd
 
-    k_ptrs = k_ptr + k_base + offs_d[:, None] * stride_kd + offs_n[None, :] * stride_kn
+    k_ptrs = k_ptr + k_base + offs_d[:, None] * stride_kn + offs_n[None, :] * stride_kd
     v_ptrs = v_ptr + v_base + offs_n[:, None] * stride_vn + offs_d[None, :] * stride_vd
 
     q_mask = (offs_m[:, None] < N) & (offs_d[None, :] < d)
@@ -59,7 +59,7 @@ def flash_attention_kernel(
         k = tl.load(k_ptrs, mask=k_mask, other=0.0)
         v = tl.load(v_ptrs, mask=v_mask, other=0.0)
 
-        scores = tl.dot(q, k , out_dtype=tl.float32) * sm_scale
+        scores = tl.dot(q, tl.trans(k) , out_dtype=tl.float32) * sm_scale
 
         seq_mask = curr_offs_n[None, :] < N
         if CAUSAL:
@@ -172,7 +172,7 @@ def fused_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, causal: b
         CAUSAL=causal,
 
         num_warps = 4,
-        num_stages = 2,
+        num_stages = 3,
     )
 
     return out
