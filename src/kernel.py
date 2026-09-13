@@ -80,7 +80,7 @@ def flash_attention_kernel(
         p = tl.exp(scores - m_new[:, None])
 
         l_i = l_i + tl.sum(p, axis=1)
-        p_cast = p.to(v.dtype.element_ty)
+        p_cast = p.to(v.dtype)
         acc = acc + tl.dot(p_cast, v, acc)
 
         m_i = m_new
