@@ -34,7 +34,7 @@ def flash_attention_kernel(
 
     q_ptrs = q_ptr + q_base + offs_m[:, None] * stride_qn + offs_d[None, :] * stride_qd
 
-    k_ptrs = k_ptr + k_base + offs_n[:, None] * stride_kn + offs_d[None, :] * stride_kn
+    k_ptrs = k_ptr + k_base + offs_d[:, None] * stride_kd + offs_n[None, :] * stride_kn
     v_ptrs = v_ptr + v_base + offs_n[:, None] * stride_vn + offs_d[None, :] * stride_vd
 
     q_mask = (offs_m[:, None] < N) & (offs_d[None, :] < d)
