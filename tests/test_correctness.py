@@ -3,6 +3,7 @@ import torch
 import itertools
 from src.baseline import baseline_attention
 from src.kernel import fused_attention
+import traceback
 
 
 def run_single_test(B, H, N, d, causal, dtype, device="cuda"):
@@ -73,7 +74,8 @@ def main():
         try:
             res = run_single_test(B, H, N, d, causal, dtype)
         except Exception as e:
-            print(f"[FAIL] {config_str}\n  Raised unexpected exception: {e}")
+            print(f"\n[FAIL] {config_str}\n  Kernel/Harness crashed with exception:")
+            traceback.print_exc()
             failed_tests += 1
             continue
 
