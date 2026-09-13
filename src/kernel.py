@@ -53,7 +53,7 @@ def flash_attention_kernel(
     for start_n in range(0, hi, BLOCK_N):
         curr_offs_n = start_n + offs_n
 
-        k_mask = (offs_d[:, None] < d) & (curr_offs_n[None, :] < N)
+        k_mask = (curr_offs_n[:, None] < N) & (offs_d[None, :] < d)
         v_mask = (curr_offs_n[:, None] < N) & (offs_d[None, :] < d)
 
         k = tl.load(k_ptrs, mask=k_mask, other=0.0)
@@ -170,6 +170,9 @@ def fused_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, causal: b
         BLOCK_N=BLOCK_N,
         BLOCK_D=BLOCK_D,
         CAUSAL=causal,
+
+        num_wraps = 4,
+        num_stages = 2,
     )
 
     return out
