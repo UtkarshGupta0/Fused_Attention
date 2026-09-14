@@ -1,0 +1,4 @@
+
+triton==3.6.0
+matplotlib
+python>=3.11
