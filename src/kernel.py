@@ -3,6 +3,46 @@ import triton
 import triton.language as tl
 import math
 
+
+def early_config_prune(configs, named_args, **kwargs):
+    d = named_args["d"]
+    q_ptr = named_args["q_ptr"]
+    dtype_size = q_ptr.element_size()
+    BLOCK_D = triton.next_power_of_2(d)
+
+    device_props = torch.cuda.get_device_properties(q_ptr.device)
+    raw_max_shared_mem = getattr(device_props, "shared_memory_per_block", 65536)
+    usable_mem = int(raw_max_shared_mem * 0.8)
+
+    pruned = []
+    for cfg in configs:
+        bm = cfg.kwargs["BLOCK_M"]
+        bn = cfg.kwargs["BLOCK_N"]
+        stages = cfg.num_stages
+
+        # Q tile memory + (K tile memory + V tile memory) * num_stages
+        sram_bytes = (bm * BLOCK_D + stages * bn * BLOCK_D * 2) * dtype_size
+
+        if sram_bytes <= usable_mem:
+            pruned.append(cfg)
+
+    return pruned if pruned else [configs[0]]
+
+
+@triton.autotune(
+    configs=[
+        triton.Config({"BLOCK_M": 32, "BLOCK_N": 32}, num_warps=4, num_stages=2),
+        triton.Config({"BLOCK_M": 64, "BLOCK_N": 32}, num_warps=4, num_stages=2),
+        triton.Config({"BLOCK_M": 64, "BLOCK_N": 64}, num_warps=4, num_stages=2),
+        triton.Config({"BLOCK_M": 64, "BLOCK_N": 64}, num_warps=4, num_stages=3),
+        triton.Config({"BLOCK_M": 64, "BLOCK_N": 64}, num_warps=8, num_stages=3),
+        triton.Config({"BLOCK_M": 128, "BLOCK_N": 64}, num_warps=8, num_stages=3),
+        triton.Config({"BLOCK_M": 128, "BLOCK_N": 64}, num_warps=8, num_stages=4),
+        triton.Config({"BLOCK_M": 128, "BLOCK_N": 128}, num_warps=8, num_stages=3),
+    ],
+    key=["N", "d"],
+    prune_configs_by={"early_config_prune": early_config_prune},
+)
 @triton.jit
 def flash_attention_kernel(
         q_ptr, k_ptr, v_ptr, out_ptr,
@@ -34,7 +74,7 @@ def flash_attention_kernel(
 
     q_ptrs = q_ptr + q_base + offs_m[:, None] * stride_qn + offs_d[None, :] * stride_qd
 
-    k_ptrs = k_ptr + k_base + offs_d[:, None] * stride_kn + offs_n[None, :] * stride_kd
+    k_ptrs = k_ptr + k_base + offs_d[:, None] * stride_kd + offs_n[None, :] * stride_kn
     v_ptrs = v_ptr + v_base + offs_n[:, None] * stride_vn + offs_d[None, :] * stride_vd
 
     q_mask = (offs_m[:, None] < N) & (offs_d[None, :] < d)
@@ -96,66 +136,26 @@ def flash_attention_kernel(
     tl.store(out_ptrs, out.to(out_ptr.dtype.element_ty), mask=out_mask)
 
 def fused_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, causal: bool = False):
-    # Shape validation checks
     if q.ndim != 4 or k.ndim != 4 or v.ndim != 4:
-        raise ValueError(
-            f"Expected 4D tensors for q, k, v (B, H, N, d), but got shapes: "
-            f"q={tuple(q.shape)}, k={tuple(k.shape)}, v={tuple(v.shape)}."
-        )
+        raise ValueError(f"Expected 4D tensors for q, k, v (B, H, N, d).")
 
     if q.size(-1) != k.size(-1):
-        raise ValueError(
-            f"Query feature dimension ({q.size(-1)}) must match Key feature dimension ({k.size(-1)})."
-        )
+        raise ValueError(f"Query feature dimension ({q.size(-1)}) must match Key feature dimension ({k.size(-1)}).")
 
     if k.size(-2) != v.size(-2):
-        raise ValueError(
-            f"Number of Key tokens ({k.size(-2)}) must match Value tokens ({v.size(-2)})."
-        )
+        raise ValueError(f"Number of Key tokens ({k.size(-2)}) must match Value tokens ({v.size(-2)}).")
 
-    if q.size(0) != k.size(0) or q.size(0) != v.size(0) or q.size(1) != k.size(1) or q.size(1) != v.size(1):
-        raise ValueError(
-            f"Batch and head dimensions must match across q, k, v. "
-            f"Got q: {(q.size(0), q.size(1))}, k: {(k.size(0), k.size(1))}, v: {(v.size(0), v.size(1))}."
-        )
-
-    if causal and q.size(-2) != k.size(-2):
-        raise ValueError(
-            f"Causal masking requires N_q == N_k, but got N_q={q.size(-2)} and N_k={k.size(-2)}."
-        )
     if not (q.is_cuda and k.is_cuda and v.is_cuda):
-        raise ValueError("fused_attention requires CUDA tensors; got devices "
-                         f"q={q.device}, k={k.device}, v={v.device}.")
-    if not (q.device == k.device == v.device):
-        raise ValueError(f"q, k, v must be on the same device, got "
-                         f"q={q.device}, k={k.device}, v={v.device}.")
+        raise ValueError("fused_attention requires CUDA tensors.")
 
     B, H, N, d = q.shape
     sm_scale = 1.0 / math.sqrt(d)
     out = torch.empty_like(q)
 
-    # Block configurations
-    device_props = torch.cuda.get_device_properties(q.device)
-    raw_max_shared_mem = getattr(device_props, "shared_memory_per_block", 65536)
-
-    SAFETY_MARGIN = 0.8
-    usable_shared_mem = int(raw_max_shared_mem * SAFETY_MARGIN)
-
     BLOCK_D = triton.next_power_of_2(d)
-    element_bytes = q.element_size()
 
-    max_btile = usable_shared_mem // (3 * BLOCK_D * element_bytes)
-
-    B_tile = 64
-    while B_tile > max_btile and B_tile > 16:
-        B_tile //= 2
-
-    BLOCK_M = B_tile
-    BLOCK_N = B_tile
-
-    #print( f"[DEBUG] dtype={q.dtype}, element_bytes={q.element_size()}, BLOCK_M={BLOCK_M}, BLOCK_N={BLOCK_N}, BLOCK_D={BLOCK_D}")
-    grid = (
-        triton.cdiv(N, BLOCK_M),
+    grid = lambda META: (
+        triton.cdiv(N, META["BLOCK_M"]),
         B * H,
     )
 
@@ -167,13 +167,12 @@ def fused_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, causal: b
         out.stride(0), out.stride(1), out.stride(2), out.stride(3),
         N, d,
         H, sm_scale,
-        BLOCK_M=BLOCK_M,
-        BLOCK_N=BLOCK_N,
         BLOCK_D=BLOCK_D,
         CAUSAL=causal,
 
         num_warps = 4,
-        num_stages = 3,
+        num_stages = 3
     )
 
     return out
+
