@@ -43,6 +43,7 @@ def early_config_prune(configs, named_args, **kwargs):
     key=["N", "d"],
     prune_configs_by={"early_config_prune": early_config_prune},
 )
+
 @triton.jit
 def flash_attention_kernel(
         q_ptr, k_ptr, v_ptr, out_ptr,
@@ -99,7 +100,7 @@ def flash_attention_kernel(
         k = tl.load(k_ptrs, mask=k_mask, other=0.0)
         v = tl.load(v_ptrs, mask=v_mask, other=0.0)
 
-        scores = tl.dot(q, k , out_dtype=tl.float32) * sm_scale
+        scores = tl.dot(q, k, dtype = tl.float32) * sm_scale
 
         seq_mask = curr_offs_n[None, :] < N
         if CAUSAL:
@@ -121,7 +122,7 @@ def flash_attention_kernel(
 
         l_i = l_i + tl.sum(p, axis=1)
         p_cast = p.to(v.dtype)
-        acc = tl.dot(p_cast, v, acc)
+        acc = acc + tl.dot(p_cast, v)
 
         m_i = m_new
 
@@ -169,10 +170,6 @@ def fused_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, causal: b
         H, sm_scale,
         BLOCK_D=BLOCK_D,
         CAUSAL=causal,
-
-        num_warps = 4,
-        num_stages = 3
     )
 
     return out
-
